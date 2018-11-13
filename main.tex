@@ -24,6 +24,8 @@
 \usepackage{tabularx} % in the preamble
 \usepackage{tabu}
 \usepackage{booktabs}
+\usepackage[tight,footnotesize]{subfigure}
+
 \newcolumntype{P}[1]{>{\centering\arraybackslash}p{#1}}
 \newcolumntype{M}[1]{>{\centering\arraybackslash}m{#1}}
 \newcommand{\head}[1]{\textnormal{\textbf{#1}}}
@@ -78,7 +80,7 @@ Introduction goes here.
 
 \section{VM Features and Types Selection}
 
-\subsection{VM Machine States Analysis}
+\subsection{VMX Operation}
 
 Intel processors (like AMD processors) provide support for virtualization by Virtual Machine eXtensions (VMX) instructions set (AMD
 supports Secure Virtual Machine (SVM) instructions set). There are two types of VMX operation: \textbf{VMX root} operation and \textbf{VMX non-root} operation.  Privileged instruction executed by VM causes a VM exit to VMX root mode to pass the control to Virtual Machine Monitor (VMM) in order to execute the instruction in a safe environment.  After handling the privileged instruction, the VM resumes to VMX non-root. The transition between VMX root to VMX non-root is called VM entry and the transition between VMX non-root to VMX root is called VM exit.  The VMM keeps track of transitions by updating an in-memory data structure called Virtual-Machine Control Structure (VMCS). VMM creats different VMCS for each vCPU and uses \texttt{VMREAD}, \texttt{VMWRITE} and \texttt{VMCLEAR} instructions to update VM information. Each VM exit comes with the exit number which showing the reason of exit. The number could be used to reveal information about running application inside VM. 
@@ -88,7 +90,23 @@ supports Secure Virtual Machine (SVM) instructions set). There are two types of 
 Virtual Machine Extensions (VMX), instructions on processors with x86 virtualization, supports virtual interrupt (\texttt{virq}) injection into VM by filling VM-entry interrupt-information field in Virtual Machine Control Structure (VMCS). Interrupt injection includes software interrupt, internal interrupt, and external interrupt. Then, the processor uses interrupt information field to deliver virtual interrupt through the VM Interrupt Descriptor Table (IDT).  Usually, the virq will be injected to guest during next VM exit by emulating the \texttt{LAPIC} register. Once the VM resumed, the pending interrupt is executed by looking up the VM's \texttt{IDT}. After handling the interrupt, during the next VM exit, the processor performs End Of Interrupt \texttt{EOI} virulization to update guest interrupt status. Looking at injected interrupt reveals useful information about running application inside the VM. We elaborate more on the extracted metrics from injected \texttt{virq} in the next subsection. 
 
 
+
+\begin{figure}[h]
+\includegraphics[width=0.45\textwidth]{figs/states.pdf}
+\caption{Virtual Machine virtual CPU State Transition}
+\label{fig:state}
+\end{figure}
+
+\subsection{VM Machine States Analysis}
+
+Figure \ref{fig:state} shows different possible states of virtual CPU of a VM and their condition to reach them. Like physical CPU (pCPU) each vCPU could be either in running state or idle state. As we mentioned before, while running a privileged instruction the VM exit to VMX root mode to execute the instruction and then with vm entry it resumes the VM. In addition, from VM point of view, VM assumes that it is the only one using the whole resources. In fact, VM shares its resources and that causes resource contention. The preemption state is when the host scheduler decides to take pCPU and gives it to another VM or process. It halts executing VM for a while without notifying the VM. Consequently, the VM process is in running state inside VM but it does not execute any instruction. The preemption state is one of the state that could not be shown from inside VM. Other than running states, analyzing idle states bring useful information. When a vCPU is being scheduled out voluntary, it execute \texttt{hlt} instruction which is a privileged instruction. This instruction causes an exit to VMX root and the host scheduler realize that the vCPU thread should be schedule out of pCPU. In this state the vCPU
+waits for a signal to be waken up. The host scheduler wakes up the vCPU thread mainly for following reasons. \textbf{First}, a process inside the VM sets a timer and the timer is fired (Timer Interrupt). \textbf{Second}, inter process communication wakes up a process (IPI interrupt). \textbf{Third}, a process inside VM waits for incoming packet from remote process (Network Interrupt). \textbf{Fourth}, a process inside the VM waits for Disk (Disk interrupts). Other than Timer, IPI, Network, and Disk interrupts, the VM could wait for another device ( with different virq number) which could be labeled as wait for other. 
+
+Talk about how we could get the states. 
+
 \subsection{Extracted Features}
+
+
 
 
 \begin{table}
@@ -151,7 +169,15 @@ Virtual Machine Extensions (VMX), instructions on processors with x86 virtualiza
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{VM Classification Model}
 
+What is clustering, how it is unsupervised and that is an advantage and how it can group workloads and what is the benefit of that. 
 
+What is Kmeans and how it is useful for euclidean globular shapes which is suitable for our extracted features. Centroids or prototypes and that we use them to represent our workload behaviour to the cloud admin. 
+
+Explain normalization performed over various features and why we need this
+
+Explain how we evaluate a cluster and introduce silhouette score of samples, total and each cluster. Provide the relationship. What can be expected and what cannot be expected from it. What does it mean to have overlap, etc.
+
+Our two stage approach where we first find very coarse clusters and then do further clustering on each.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Experimental Evaluation}
 
@@ -172,8 +198,91 @@ Virtual Machine Extensions (VMX), instructions on processors with x86 virtualiza
 \label{tab:notation}
 \end{table}
 
+%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure}[!htpb]
+\centering
+\includegraphics[width=0.45\textwidth]{figs/VM_KMEANS_3_centroids.png}
+\caption{Characteristic of Workloads Discovered in First Stage of Clustering}
+\label{fig:1st-centroids}
+\end{figure}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Discuss the centroids found and say what each represents and why these are interesting. Also how we got to this three clusters by taking the one with the best silhouette score. 
 
+%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure*}[!htpb]
+\centering
+\includegraphics[width=\textwidth]{figs/VM_KMEANS_5_C0.png}
+\caption{Similarity Plot For the Five Workload Clusters Discovered in the First Group}
+\label{fig:c0-sim}
+\end{figure*}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Then use similarity plot to say how good or bad the first group is clustered: note how c2 is packed but c3 or c1 is not and explain. Consider overlapping c2 and c3 and explain why that happens and if it reveals some interesting information (Hani?)
 
+%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure*}[!htpb]
+\centering
+\includegraphics[width=\textwidth]{figs/VM_KMEANS_3_C1.png}
+\caption{Similarity Plot For the Three Workload Clusters Discovered in the Second Group}
+\label{fig:c1-sim}
+\end{figure*}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Do the same for second group. More fuzzy group. In particular C2 is very much like noise and uninteresting VM workload. What does this exactly mean for a data center admin? elaborate. 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure*}[!htpb]
+\centering
+\includegraphics[width=\textwidth]{figs/VM_KMEANS_2_C2.png}
+\caption{Similarity Plot For the Two Workload Clusters Discovered in the Third Group}
+\label{fig:c2-sim}
+\end{figure*}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Again the same for third group.
+
+%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure*}
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_5_C0_centroids.png}
+		\label{fig:c0-centroids}
+	\end{subfigure}%
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_3_C1_centroids.png}
+		\label{fig:c1-centroids}
+	\end{subfigure}%
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_2_C2_centroids.png}
+		\label{fig:c2-centroids}
+	\end{subfigure}%
+	\caption{Characteristic of Workloads Discovered in Second Stage of Clustering}
+	\label{fig:2nd-centroids}
+\end{figure*}
+%%%%%%%%%%%%%%%%%%%%%%
+Now talk about the centroids and how they represent the workload for each cluster.point to interesting and very contrasting cases. How can we take advantage of these diagrams in real life? elaborate (Hani?)
+
+%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure*}
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_5_C0_sil.png}
+		\label{fig:c0-sil}
+	\end{subfigure}%
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_3_C1_sil.png}
+		\label{fig:c1-sil}
+	\end{subfigure}%
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_2_C2_sil.png}
+		\label{fig:c2-sil}
+	\end{subfigure}%
+	\caption{Silhouette Score of VM Clusters Discovered in Second Stage of Clustering}
+	\label{fig:2nd-sil}
+\end{figure*}
+%%%%%%%%%%%%%%%%%%%%%%
+These figures \ref{fig:2nd-sil} can assist explaining the similarity matrices. 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

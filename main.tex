@@ -24,6 +24,8 @@
 \usepackage{tabularx} % in the preamble
 \usepackage{tabu}
 \usepackage{booktabs}
+\usepackage[tight,footnotesize]{subfigure}
+
 \newcolumntype{P}[1]{>{\centering\arraybackslash}p{#1}}
 \newcolumntype{M}[1]{>{\centering\arraybackslash}m{#1}}
 \newcommand{\head}[1]{\textnormal{\textbf{#1}}}
@@ -151,7 +153,15 @@ Virtual Machine Extensions (VMX), instructions on processors with x86 virtualiza
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{VM Classification Model}
 
+What is clustering, how it is unsupervised and that is an advantage and how it can group workloads and what is the benefit of that. 
 
+What is Kmeans and how it is useful for euclidean globular shapes which is suitable for our extracted features. Centroids or prototypes and that we use them to represent our workload behaviour to the cloud admin. 
+
+Explain normalization performed over various features and why we need this
+
+Explain how we evaluate a cluster and introduce silhouette score of samples, total and each cluster. Provide the relationship. What can be expected and what cannot be expected from it. What does it mean to have overlap, etc.
+
+Our two stage approach where we first find very coarse clusters and then do further clustering on each.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Experimental Evaluation}
 
@@ -172,8 +182,91 @@ Virtual Machine Extensions (VMX), instructions on processors with x86 virtualiza
 \label{tab:notation}
 \end{table}
 
+%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure}[!htpb]
+\centering
+\includegraphics[width=0.45\textwidth]{figs/VM_KMEANS_3_centroids.png}
+\caption{Characteristic of Workloads Discovered in First Stage of Clustering}
+\label{fig:1st-centroids}
+\end{figure}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Discuss the centroids found and say what each represents and why these are interesting. Also how we got to this three clusters by taking the one with the best silhouette score. 
 
+%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure*}[!htpb]
+\centering
+\includegraphics[width=\textwidth]{figs/VM_KMEANS_5_C0.png}
+\caption{Similarity Plot For the Five Workload Clusters Discovered in the First Group}
+\label{fig:c0-sim}
+\end{figure*}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Then use similarity plot to say how good or bad the first group is clustered: note how c2 is packed but c3 or c1 is not and explain. Consider overlapping c2 and c3 and explain why that happens and if it reveals some interesting information (Hani?)
 
+%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure*}[!htpb]
+\centering
+\includegraphics[width=\textwidth]{figs/VM_KMEANS_3_C1.png}
+\caption{Similarity Plot For the Three Workload Clusters Discovered in the Second Group}
+\label{fig:c1-sim}
+\end{figure*}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Do the same for second group. More fuzzy group. In particular C2 is very much like noise and uninteresting VM workload. What does this exactly mean for a data center admin? elaborate. 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure*}[!htpb]
+\centering
+\includegraphics[width=\textwidth]{figs/VM_KMEANS_2_C2.png}
+\caption{Similarity Plot For the Two Workload Clusters Discovered in the Third Group}
+\label{fig:c2-sim}
+\end{figure*}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Again the same for third group.
+
+%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure*}
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_5_C0_centroids.png}
+		\label{fig:c0-centroids}
+	\end{subfigure}%
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_3_C1_centroids.png}
+		\label{fig:c1-centroids}
+	\end{subfigure}%
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_2_C2_centroids.png}
+		\label{fig:c2-centroids}
+	\end{subfigure}%
+	\caption{Characteristic of Workloads Discovered in Second Stage of Clustering}
+	\label{fig:2nd-centroids}
+\end{figure*}
+%%%%%%%%%%%%%%%%%%%%%%
+Now talk about the centroids and how they represent the workload for each cluster.point to interesting and very contrasting cases. How can we take advantage of these diagrams in real life? elaborate (Hani?)
+
+%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure*}
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_5_C0_sil.png}
+		\label{fig:c0-sil}
+	\end{subfigure}%
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_3_C1_sil.png}
+		\label{fig:c1-sil}
+	\end{subfigure}%
+	\begin{subfigure}
+		\centering
+		\includegraphics[width=0.3\textwidth]{figs/VM_KMEANS_2_C2_sil.png}
+		\label{fig:c2-sil}
+	\end{subfigure}%
+	\caption{Silhouette Score of VM Clusters Discovered in Second Stage of Clustering}
+	\label{fig:2nd-sil}
+\end{figure*}
+%%%%%%%%%%%%%%%%%%%%%%
+These figures \ref{fig:2nd-sil} can assist explaining the similarity matrices. 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

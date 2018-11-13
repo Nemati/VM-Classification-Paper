@@ -8,15 +8,35 @@
                                                          
 \overrideIEEEmargins
 
+\usepackage[latin1]{inputenc}
+\usepackage{makecell}
+\usepackage{graphicx}
+\usepackage{blindtext, graphicx}
+\usepackage{multirow}
+%\usepackage{algorithm}
+\usepackage{algpseudocode}
+\algdef{SE}[DOWHILE]{Do}{doWhile}{\algorithmicdo}[1]{\algorithmicwhile\ #1}%
+\setcounter{secnumdepth}{4}
+\usepackage[linesnumbered,ruled,vlined]{algorithm2e} 
+\usepackage[first=0,last=9]{lcg}
+\usepackage{color, colortbl}
+\definecolor{Gray}{gray}{0.9}
+\usepackage{tabularx} % in the preamble
+\usepackage{tabu}
+\usepackage{booktabs}
+\newcolumntype{P}[1]{>{\centering\arraybackslash}p{#1}}
+\newcolumntype{M}[1]{>{\centering\arraybackslash}m{#1}}
+\newcommand{\head}[1]{\textnormal{\textbf{#1}}}
+
 
 \title{\LARGE \bf
-VM Classification using Host Kernel Tracing
+Host Hypervisor Trace Mining for Virtual Machine Workload Characterization
 }
 
 
-\author{\IEEEauthorblockN{Author1\IEEEauthorrefmark{1}, Author2\IEEEauthorrefmark{2}, and Author3\IEEEauthorrefmark{3}}
+\author{\IEEEauthorblockN{Hani Nemati\IEEEauthorrefmark{1}, Seyed Vahid Azhari\IEEEauthorrefmark{2}, and Michel R. Dagenais\IEEEauthorrefmark{3}}
 \IEEEauthorblockA{Department of Computer and Software Engineering,\\ Polytechnique Montreal, Quebec, Canada \\
-Email: \{\IEEEauthorrefmark{1}Author1,\IEEEauthorrefmark{2}Author2,\IEEEauthorrefmark{3}Author3\}@polymtl.ca}}
+Email: \{\IEEEauthorrefmark{1}hani.nemati@polymtl.ca,\IEEEauthorrefmark{2}azharivs@gmail.com,\IEEEauthorrefmark{3}michel.dagenais@polymtl.ca}}
 
 
 \begin{document}
@@ -31,10 +51,18 @@ Email: \{\IEEEauthorrefmark{1}Author1,\IEEEauthorrefmark{2}Author2,\IEEEauthorre
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \begin{abstract}
 
-Abstract goes here. 
+The efficient operation and resource management of multi-tenant data centers hosting thousands of services is a demanding task that requires precise and detailed information regarding the behaviour of each and every virtual machine (VM). Often, coarse measures such as CPU, memory, disk and network usage by VMs are considered in grouping them onto the same physical server, as detailed measures would require access to the guest operating system (OS) which is not feasible in a multi-tenant setting.
+
+In this paper, we propose host level hypervisor tracing as a non-intrusive means to extract useful features that can provide for fine grain characterization of VM behaviour. In particular, we extract VM blocking periods as well as virtual interrupt injection rates to detect multiple levels of resource intensiveness. In addition, we consider resource contention rate due to other VMs and the host, along with reasons for exit from non-root to root privileged mode revealing useful information about the nature of the underlying VM workload. We also use tracing to get information about rate of process and thread preemption in each VM extracting process and thread contention as another feature set. We then employ various feature selection strategies and assess the quality of the resulting workload clustering. Notably, we adopt a two stage feature selection approach in addition to a one shot clustering scheme. Moreover, we consider inter-cluster and intra-cluster similarity metrics such as silhouette score to discover distinct groups of workloads as well as workload groups with significant overlap. This information can be used by 1) data center administrators to gain deep visibility into the nature of various VMs running on their infrastructure, 2) performance engineers to assist root cause analysis of VM issues and 3) IaaS provider to help in resource management based on VM behavior. 
 
 
 \end{abstract}
+
+
+\begin{IEEEkeywords}
+VM Clustering, Workload characterization, performance analysis, tracing, vCPU states, K-Means, Machine Learning.
+\end{IEEEkeywords}
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Introduction}
 
@@ -46,8 +74,79 @@ Introduction goes here.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{VM Machine States Analysis}
 
+
+\section{VM Features and Types Selection}
+
+\subsection{VM Machine States Analysis}
+
+Intel processors (like AMD processors) provide support for virtualization by Virtual Machine eXtensions (VMX) instructions set (AMD
+supports Secure Virtual Machine (SVM) instructions set). There are two types of VMX operation: \textbf{VMX root} operation and \textbf{VMX non-root} operation.  Privileged instruction executed by VM causes a VM exit to VMX root mode to pass the control to Virtual Machine Monitor (VMM) in order to execute the instruction in a safe environment.  After handling the privileged instruction, the VM resumes to VMX non-root. The transition between VMX root to VMX non-root is called VM entry and the transition between VMX non-root to VMX root is called VM exit.  The VMM keeps track of transitions by updating an in-memory data structure called Virtual-Machine Control Structure (VMCS). VMM creats different VMCS for each vCPU and uses \texttt{VMREAD}, \texttt{VMWRITE} and \texttt{VMCLEAR} instructions to update VM information. Each VM exit comes with the exit number which showing the reason of exit. The number could be used to reveal information about running application inside VM. 
+
+\subsection{Virtual Interrupt Injection}
+
+Virtual Machine Extensions (VMX), instructions on processors with x86 virtualization, supports virtual interrupt (\texttt{virq}) injection into VM by filling VM-entry interrupt-information field in Virtual Machine Control Structure (VMCS). Interrupt injection includes software interrupt, internal interrupt, and external interrupt. Then, the processor uses interrupt information field to deliver virtual interrupt through the VM Interrupt Descriptor Table (IDT).  Usually, the virq will be injected to guest during next VM exit by emulating the \texttt{LAPIC} register. Once the VM resumed, the pending interrupt is executed by looking up the VM's \texttt{IDT}. After handling the interrupt, during the next VM exit, the processor performs End Of Interrupt \texttt{EOI} virulization to update guest interrupt status. Looking at injected interrupt reveals useful information about running application inside the VM. We elaborate more on the extracted metrics from injected \texttt{virq} in the next subsection. 
+
+
+\subsection{Extracted Features}
+
+
+\begin{table}
+\caption{Notations}
+\centering
+\begin{tabular}{ll}
+  \hline
+  \rowcolor{Gray}
+  \footnotesize \textbf{Term} & \footnotesize \textbf{Features collected by tracing} \\
+  \hline
+  \hline
+  \footnotesize \textit{$W_{Disk}$} & \footnotesize Wait for Disk average time\\
+  \footnotesize \textit{$W_{Net}$} & \footnotesize Wait for Net average time\\
+  \footnotesize \textit{$W_{Timer}$} & \footnotesize Wait for Timer average time\\
+  \footnotesize \textit{$W_{Task}$} & \footnotesize Wait for Task average time\\
+  \footnotesize \textit{$E_{Root}$} & \footnotesize Root mode average time\\
+  \footnotesize \textit{$E_{non-Root}$} & \footnotesize non-Root mode average time\\
+  \footnotesize \textit{$FP_{VMVM}$} & \footnotesize The frequency of two VMs preempt each other\\
+  \footnotesize \textit{$FP_{HostVM}$} & \footnotesize The frequency of host preempts a VM\\
+  \footnotesize \textit{$FP_{VMProc}$} & \footnotesize The frequency of VM processes preempt each other\\
+  \footnotesize \textit{$FP_{VMThread}$} & \footnotesize The frequency of VM threads preempt each other\\
+  \footnotesize \textit{$f_{Disk}$} & \footnotesize The frequency of wait for Disk\\
+  \footnotesize \textit{$f_{Net}$} & \footnotesize The frequency of wait for Net\\
+  \footnotesize \textit{$f_{Timer}$} & \footnotesize The frequency of wait for Timer\\
+  \footnotesize \textit{$f_{Task}$} & \footnotesize The frequency of wait for Task\\
+  \footnotesize \textit{$N_{Exit}$} & \footnotesize The frequency of different VM exit reason\\
+  \footnotesize \textit{$f_{Read}$} & \footnotesize The frequency of read from Disk\\
+  \footnotesize \textit{$f_{Write}$} & \footnotesize The frequency of write to Disk\\
+  \footnotesize \textit{$B_{Read}$} & \footnotesize Total Block Disk Read\\
+  \footnotesize \textit{$L_{Read}$} & \footnotesize Total Latency Disk Read\\
+  \footnotesize \textit{$B_{Write}$} & \footnotesize Total Block Disk Write\\
+  \footnotesize \textit{$L_{Write}$} & \footnotesize Total Latency Disk Write\\
+  \hline
+\end{tabular}
+\label{tab:notation}
+\end{table}
+
+
+
+\begin{table}
+\caption{Needed Tracepoints for feature extraction}
+\centering
+\begin{tabular}{p{2.5cm}p{5.8cm}}
+  \hline
+  \rowcolor{Gray}
+  \footnotesize \textbf{Tracepoint} & \footnotesize \textbf{Description} \\
+  \hline
+  \hline
+  
+  \footnotesize \texttt{sched\_wakeup}  & \footnotesize Wakeup and resume a task \\
+  \footnotesize \texttt{vcpu\_enter\_guest}  & \footnotesize vCPU enters guest mode \\
+  \footnotesize \texttt{vm\_exit}  & \footnotesize vCPU exits guest mode \\
+  \footnotesize \texttt{vm\_inj\_virq}  & \footnotesize Inject virtual interrupt into VM \\
+  \footnotesize \texttt{sched\_switch}  & \footnotesize  Scheduling out or in a process\\
+    \hline
+\end{tabular}
+\label{tab:agent-base-tracepoints}
+\end{table}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{VM Classification Model}
@@ -56,10 +155,28 @@ Introduction goes here.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Experimental Evaluation}
 
+\begin{table}
+\caption{List of applications for workload generation}
+\centering
+\begin{tabular}{M{0.14\linewidth}M{0.30\linewidth}M{0.45\linewidth}}
+  \hline
+  \rowcolor{Gray}
+  \footnotesize \textbf{Application Behavior} & \footnotesize \textbf{Application Name} & \footnotesize \textbf{Application Description} \\
+  \hline
+  \hline
+    \footnotesize \rotatebox[origin=c]{90}{CPU} & \footnotesize Sysbench, Stress, Burn, Chess, Compress, encode, interBench, openSSL, smallpt, infinitLoop  & Bunch of well-konwn benchmarking tools for Linux to stress CPU including computing prime number, compressing files, video and audio encoding, mathematic operations \\  \hline
+  \footnotesize  \rotatebox[origin=c]{90}{Disk} & \footnotesize Sysbench, Compress, dbench, dd, interBench, hdparam, fsMarker, aio, ioZone, pgbench-disk, pqlight, stream, tioBench & Include different testing toolkits for Disk I/O. These toolkits provide realistic scenario for reading/writing with different options to evaluate Disk I/O.  \\  \hline
+   \footnotesize  \rotatebox[origin=c]{90}{Net} & \footnotesize  Wget, iperf, netperf, netping, netSpeedTest, scp, ab, httperf & Include real network applications in Linux. It covers web server, file transfer server, downloading file.    \\
+  \hline
+\end{tabular}
+\label{tab:notation}
+\end{table}
+
 
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 \section{Conclusions}
 
 

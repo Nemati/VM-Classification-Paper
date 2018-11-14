@@ -25,6 +25,7 @@
 \usepackage{tabu}
 \usepackage{booktabs}
 \usepackage[tight,footnotesize]{subfigure}
+\usepackage[usenames,table]{xcolor}
 
 \newcolumntype{P}[1]{>{\centering\arraybackslash}p{#1}}
 \newcolumntype{M}[1]{>{\centering\arraybackslash}m{#1}}
@@ -100,11 +101,68 @@ Virtual Machine Extensions (VMX), instructions on processors with x86 virtualiza
 \subsection{VM Machine States Analysis}
 
 Figure \ref{fig:state} shows different possible states of virtual CPU of a VM and their condition to reach them. Like physical CPU (pCPU) each vCPU could be either in running state or idle state. As we mentioned before, while running a privileged instruction the VM exit to VMX root mode to execute the instruction and then with vm entry it resumes the VM. In addition, from VM point of view, VM assumes that it is the only one using the whole resources. In fact, VM shares its resources and that causes resource contention. The preemption state is when the host scheduler decides to take pCPU and gives it to another VM or process. It halts executing VM for a while without notifying the VM. Consequently, the VM process is in running state inside VM but it does not execute any instruction. The preemption state is one of the state that could not be shown from inside VM. Other than running states, analyzing idle states bring useful information. When a vCPU is being scheduled out voluntary, it execute \texttt{hlt} instruction which is a privileged instruction. This instruction causes an exit to VMX root and the host scheduler realize that the vCPU thread should be schedule out of pCPU. In this state the vCPU
-waits for a signal to be waken up. The host scheduler wakes up the vCPU thread mainly for following reasons. \textbf{First}, a process inside the VM sets a timer and the timer is fired (Timer Interrupt). \textbf{Second}, inter process communication wakes up a process (IPI interrupt). \textbf{Third}, a process inside VM waits for incoming packet from remote process (Network Interrupt). \textbf{Fourth}, a process inside the VM waits for Disk (Disk interrupts). Other than Timer, IPI, Network, and Disk interrupts, the VM could wait for another device ( with different virq number) which could be labeled as wait for other. 
+waits for a signal to be waken up. The host scheduler wakes up the vCPU thread mainly for following reasons. \textbf{First}, a process inside the VM sets a timer and the timer is fired (Timer Interrupt). \textbf{Second}, inter process communication wakes up a process (IPI interrupt). \textbf{Third}, a process inside VM waits for incoming packet from remote process (Network Interrupt). \textbf{Fourth}, a process inside the VM waits for Disk (Disk interrupts). Other than Timer, IPI, Network, and Disk interrupts, the VM could wait for another device (with different virq number) which could be labeled as wait for other. The wait for X states along with running state will be used by our feature extraction mechanism to collect information about running VM. 
 
-Talk about how we could get the states. 
+In order to detect the reason of waking up, we introduce Wake-up Reason Analysis (WRA). The pseudocode for the WRA algorithm is depicted in Algorithm \ref{alg:wra}. The WRA algorithm receives a sequence of events as input and detects the reason of wait for a vCPU of given VM. Whenever a VM has something to execute, it asks for pCPU from host scheduler. Receiving \texttt{sched\_wakeup} event shows that the VM ask for a pCPU and the state of vCPU is updated to waiting for pCPU. Event \texttt{sched\_in} shows a vCPU is scheduled in on pCPU, but still it is in waiting state to run. We name this state wait for vCPU. Before running the vCPU on pCPU the hypervisor injects interrupt into the VM. These interrups are the key of our analysis. The event related to interrupt injection is \texttt{vm\_inj\_virq}. The vec field in this event is compared with the Task, Timer, Disk, and Network interrupt number. The reason of waiting is updated based on the \textit{vec} number. The different interrupt numbers are being retrieved by following the pattern of using device. This pattern is different between hypervisors.  
+
+The \texttt{vcpu\_enter\_guest} event changes the vCPU state to running (Line \ref{wra:line:vcpu_running}). We also store the CR3 value in the payload of this event.  CR3 points to the page directory of a process in any level of virtualization, and could be used as an unique identifier of a process. As we mentioned before, a running vCPU could be preempted either in host level (L0) or guest level (L1). If the last exit is \texttt{hlt}, which means that the VM runs the idle thread, the state will be modified as wait for reason. In the other case of exit number, the state will be changed to preempted (Line \ref{wra:line:sched_switch:preemptedL0}). The preemption L1 happens when the process inside the VM is preempted by guest scheduler. In this case the cr3 will be changed with out running \texttt{hlt} instruction (Line \ref{wra:line:process:preemptedL1}).  
+
+\begin{algorithm} 
+  \uIf{event == $sched\_in$}{
+	$vCPU_j^{State}$ = vCPU-root\;\label{wra:line:vcpu_wakeup}
+	last\_exit = getLastExit($vCPU_j$) \;
+	\uIf{last\_exit != hlt} {
+  	    $vCPU_k^{State}$ = Preempted\_L0 \label{wra:line:sched_switch:preemptedL0}
+  	} \uElse {
+  	    $vCPU_k^{State}$ = waiting\_for\_reason \label{wra:line:sched_switch:waiting}
+  	}
+  }
+   \uElseIf{ event == $vm\_exit$}{
+   putLastExit($exit\_number$)\;
+  	$vCPU_j^{State}$ = vCPU-root \;\label{wra:line:vcpu_root}
+  }
+  \uElseIf{ event == $sched\_wakeup$}{
+  	$vCPU_j^{State}$ = pCPU-waiting \;\label{wra:line:pcpu_wakeup}
+  }
+  \uElseIf{ event == $vcpu\_enter\_guest$}{
+    lastCR3 = getLastCR3($vCPU_j$)\;
+    \uIf{lastCR3 != cr3} {
+  	    $vCPU_j^{internal}$ = Preempted\_L1 \label{wra:line:process:preemptedL1}
+  	} 
+    $vCPU_j^{State}$ = vCPU-root\;\label{wra:line:vcpu_wakeup}
+  	
+    $vCPU_j^{State}$ = vCPU-non-root \;\label{wra:line:vcpu_running}
+  	putLastCR3(c$r3$) \;\label{wra:line:cr3Store}
+  }
+  \uElseIf{ event == $sched\_out$}{
+  	$vCPU_j^{State}$ = idle \;\label{wra:line:idle}
+  }
+ \uElseIf{ event == $vm\_inj\_virq$}{
+ 	\uIf{vec == Task Interrupt} {
+ 		Update State for $vCPU_j^{State}$ to Task\;\label{wra:line:task}
+ 	} 
+ 	\uElseIf{vec == Timer Interrupt} {
+ 	Update State for $vCPU_j^{State}$ to Timer\;\label{wra:line:Timer}
+ 	}
+ 	\uElseIf{vec == Disk Interrupt} {
+ 	Update State for $vCPU_j^{State}$ to Disk\;\label{wra:line:Disk}
+ 	}
+ 	\uElseIf{vec == Network Interrupt} {
+ 	Update State for $vCPU_j^{State}$ to Network\;\label{wra:line:Network}
+ 	}
+ 	\uElse{
+ 	Update State for $vCPU_j^{State}$ to Other
+ 	}
+ }
+\caption{Wakeup Reason Analysis Algorithm (WRA)}
+\label{alg:wra}
+\end{algorithm}
 
 \subsection{Extracted Features}
+
+
+
+
 
 
 
@@ -167,19 +225,50 @@ Talk about how we could get the states.
 \end{table}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{VM Classification Model}
+\section{VM Workload Clustering Model}
 
-What is clustering, how it is unsupervised and that is an advantage and how it can group workloads and what is the benefit of that. 
+%What is clustering, how it is unsupervised and that is an advantage and how it can group workloads and what is the benefit of that. What is Kmeans and how it is useful for euclidean globular shapes which is suitable for our extracted features. Centroids or prototypes and that we use them to represent our workload behaviour to the cloud admin.  put a few refs to Kmeans
+We apply the Kmeans clustering algorithm \cite{kmeans1} to our set of sample vectors derived via the feature extraction process. Note that this is an unsupervised process as compared with classification and requires no training data set. A clustering approach groups VM workloads based on the actual workload distribution in the data center. Consequently, it potentially ``discovers'' interesting groups of VMs, as opposed to assigning a predefined label to them. Each sample $i$ represents some VM workload denoted by $VM_i$ as a vector of features, i.e.,  
+%
+\begin{equation}
+VM_i = (f_{i1},f_{i2},...,f_{ij},...,f_{iM})
+\label{eq:sample-vector}
+\end{equation}
 
-What is Kmeans and how it is useful for euclidean globular shapes which is suitable for our extracted features. Centroids or prototypes and that we use them to represent our workload behaviour to the cloud admin. 
+%Explain normalization performed over various features and why we need this
+To allow for meaningful comparison, sample vectors are individually normalized using the $L2$ norm such that they become of equal magnitude \cite{Kmeans2}, that is,
+%
+\begin{equation}
+\sum_{m=1}^{M} f_{im}^2 = 1,~\forall i=1..N.
+\label{eq:l2-norm} 
+\end{equation}
 
-Explain normalization performed over various features and why we need this
+The Kmeans clustering algorithm will discover clusters $C_1,...,C_K$ of similar VMs over a sample matrix, $VM_{N,M}$, which includes one sample vector per row. In order to do this, we use the Euclidean distance metric over feature vectors to measure similarity among VM samples. Two VMs are grouped into the same cluster if their Euclidean distance is small. More formally, the Kmeans approach to clustering is based on the notion of centroids (a.k.a. prototypes), which are hypothetical sample points placed at the center of each cluster. Given a certain number of centroids, $K$, Kmeans will determine cluster membership for all samples such that the sum of squared distance from each sample $VM_i$ to its closest centroid $C_j$ is minimized over all set of samples \cite{kmeans3}. That is,
+%
+\begin{equation}
+min \sum_{i=1}^{N} \sum_{k=1}^{M} (f_{ik} - c_{jk})^2 \label{eq:kmeans-obj}
+\label{eq:kmeans-obj}
+\end{equation}
+%
+where the solution to (\ref{eq:kmeans-obj}) will be $C_j = (c_{j1},...,c_{jk},...,c_{jM}), j=1..K$, which are the hypothetical coordinates of the $j^{th}$ centroid that is the closest to $VM_i$.
 
-Explain how we evaluate a cluster and introduce silhouette score of samples, total and each cluster. Provide the relationship. What can be expected and what cannot be expected from it. What does it mean to have overlap, etc.
+A distinct advantage of Kmeans is that each centroid (a.k.a. prototype) can be used to represent the workload of its cluster as discussed in Section \ref{sec:exp}. This provides condensed useful information of the bahavior of many VMs. 
 
-Our two stage approach where we first find very coarse clusters and then do further clustering on each.
+%Explain how we evaluate a cluster and introduce silhouette score of samples, total and each cluster. Provide the relationship. What can be expected and what cannot be expected from it. What does it mean to have overlap, etc.
+Furthermore, we need a measure to assess the suitability of a given clustering. There are an array of such measures introduced in the literature \cite{kmeans4}, which essentially characterize a clustering through its cohesion and/or separation. A cohesive clustering is one in which individual clusters consist of tightly packed very similar samples. Separation, on the other hand, evaluates how distinct clusters are well apart. Consequently, we adopt the ``silhouette'' score \cite{sil} which considers both cohesion and separation and is computed for a given sample $VM_i$ as,
+%
+\begin{equation}
+s_i = \frac{out_i - in_i}{max(in_i,out_i)}
+\label{eq:sil}
+\end{equation}
+%
+Here, $in_i$ is the average distance of $VM_i$ to all other VM samples in its cluster, while $out_i$ is the minimum average distance between $VM_i$ and all other samples in clusters not containing $VM_i$. The value of silhouette coefficient lies between -1 and 1, where a positive large value is more desirable. We would like to have $in_i$ as close as possible to zero for a very cohesive cluster, and to have $out_i$ as large as possible representing very large separation from the closest neighbor cluster. A negative value $(in_i > out_i)$ is undesirable because it corresponds to when average distance to in-cluster samples exceeds minimum average distance to out-cluster samples. It should be noted that, while the quality of a clustering algorithm plays an important role in finding good clusters, having cohesive and well separated clusters also largely depends on the nature of the data and the distance metric. The silhouette coefficient can be averaged over a cluster or the entire samples to yield a silhouette score per cluster or for the entire clustering, respectively. 
+
+%Our two stage approach where we first find very coarse clusters and then do further clustering on each.
+We employ a two stage clustering approach, where the entire set of VMs are first grouped into a small number of clusters. We then apply a second stage clustering to each cluster discovered in the first stage to yield our final VM groups. Hence, each VM would be characterized by two numbers $(Ci,Cj)$ standing for the cluster it belongs to in the first and second stage, respectively. We believe this two stage approach provides better grouping of VM workloads by first performing a coarse grain characterization of VMs followed by more detailed clustering. It should be noted that, our clustering selection criteria is always guided by total silhouette score. That is, at any stage we select the clustering with maximum total silhouette score as the desired solution. 
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{Experimental Evaluation}
+\section{Experimental Evaluation}\label{sec:exp}
 
 \begin{table}
 \caption{List of applications for workload generation}
@@ -206,23 +295,37 @@ Our two stage approach where we first find very coarse clusters and then do furt
 \label{fig:1st-centroids}
 \end{figure}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
-Discuss the centroids found and say what each represents and why these are interesting. Also how we got to this three clusters by taking the one with the best silhouette score. 
+%Discuss the centroids found and say what each represents and why these are interesting. Also how we got to this three clusters by taking the one with the best silhouette score. 
+In this section we presents results for the two stage clustering approach. For the results presented in this paper we have only used cpu usage and interrupt injection rate for network, disk, task, and timer interrupts as our feature vector. {\color{red} Hani: I think you missed the injection rates in your table}. At the first stage we found that applying Kmeans to find three coarse clusters would yield the best total silhouette score of 0.42 and per cluster silhouette of $C0=0.38, C1=0.35, C2=0.48$. Figure \ref{fig:1st-centroids} shows the three centroids obtained via the first stage clustering. Note that the feature vectors are normalized so that their absolute values are of no significance. 
 
+Interestingly, three distinct groups of VMs are discovered in Figure \ref{fig:1st-centroids}. Cluster C0 is discovered to be CPU intensive as the prototype usage pattern includes large CPU and Timer interrupt injection rate. The large timer injection rate corresponds to many host scheduler preemptions which is characteristic of CPU intensive tasks that do not yield CPU. {\color{red} Hani: please check, elaborate and provide examples.} On the other hand, clusters C1 and C2 represent disk and network intensive VMs, respectively. An interesting observation is that unlike the network intensive VMs of C2, disk intensive VMs in C1 make significant use of task interrupt. This is an indication of disk VMs waiting more frequently for some task to finish I/O as opposed to network VMs which wait for some process on another machine. The information obtained via cluster prototypes can be used by cloud infrastructure administrator to guide resource management. {\color{red} Hani: please check, elaborate and provide examples.}
+
+We next apply Kmeans to each of the first stage clusters independently and select the clustering with largest silhouette score. For our particular set of workload, this approach resulted in a total of 10 clusters. The first stage cluster C0 turns out to be best characterized as five distinct groups of VMs with a total silhouette score of 0.59. Figure \ref{fig:c0-sim} illustrates the similarity plot for the five clusters found in the second stage. Each point on both X and Y axis correspond to a particular VM which is labeled once on the Y axis. The label consists of a VM textual name followed by a slash and then the PID of the process running the VM. The second stage cluster index corresponding to this VM is enclosed in brackets at the end. 
+
+Each point on the similarity plot presents the normalized euclidean distance defined as in (\ref{eq:similarity}) between VM feature vectors intersecting at that point. Note that $d_{ij}$ is the actual euclidean distance between VM $i$ and $j$, while $d_{max}$ and $d_{min}$ correspond to the maximum and minimum distances, respectively. It follows that the similarity score of any two VM is between zero and one. Interestingly, if VMs are sorted according to their cluster index, the similarity plot should resemble a block diagonal shape for cohesive and well separated clusters. 
+%
+\begin{equation}
+sim_{ij} = 1-\frac{d_{ij}-d_{min}}{d_{max}-d_{min}}
+\label{eq:similarity}
+\end{equation}
+%
 %%%%%%%%%%%%%%%%%%%%%%%%%
 \begin{figure*}[!htpb]
 \centering
 \includegraphics[width=\textwidth]{figs/VM_KMEANS_5_C0.png}
-\caption{Similarity Plot For the Five Workload Clusters Discovered in the First Group}
+\caption{Similarity Plot For the Five Workload Clusters Discovered in the First Group (Silhouette = 0.59)}
 \label{fig:c0-sim}
 \end{figure*}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
-Then use similarity plot to say how good or bad the first group is clustered: note how c2 is packed but c3 or c1 is not and explain. Consider overlapping c2 and c3 and explain why that happens and if it reveals some interesting information (Hani?)
+%Then use similarity plot to say how good or bad the first group is clustered: note how c2 is packed but c3 or c1 is not and explain. Consider overlapping c2 and c3 and explain why that happens and if it reveals some interesting information (Hani?)
+
+The similarity matrix 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%
 \begin{figure*}[!htpb]
 \centering
 \includegraphics[width=\textwidth]{figs/VM_KMEANS_3_C1.png}
-\caption{Similarity Plot For the Three Workload Clusters Discovered in the Second Group}
+\caption{Similarity Plot For the Three Workload Clusters Discovered in the Second Group (Silhouette = 0.40)}
 \label{fig:c1-sim}
 \end{figure*}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -232,7 +335,7 @@ Do the same for second group. More fuzzy group. In particular C2 is very much li
 \begin{figure*}[!htpb]
 \centering
 \includegraphics[width=\textwidth]{figs/VM_KMEANS_2_C2.png}
-\caption{Similarity Plot For the Two Workload Clusters Discovered in the Third Group}
+\caption{Similarity Plot For the Two Workload Clusters Discovered in the Third Group (Silhouette = 0.46)}
 \label{fig:c2-sim}
 \end{figure*}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
